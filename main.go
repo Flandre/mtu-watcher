@@ -47,6 +47,43 @@ type channelsConfig struct {
 	Servers []serverInfo `json:"servers"`
 }
 
+// appConfig 表示可选的配置文件内容（config.json）。
+type appConfig struct {
+	NicName        string `json:"nicName"`
+	IfaceName      string `json:"ifaceName"`
+	LowMTU         int    `json:"lowMTU"`
+	NormalMTU      int    `json:"normalMTU"`
+	IdleTimeoutSec int    `json:"idleTimeoutSec"`
+	Filter         string `json:"filter"`
+	VerbosePacket  bool   `json:"verbosePacket"`
+}
+
+// loadConfig 尝试从 exe 所在目录读取 config.json。
+// 成功返回配置和路径，文件不存在时返回 (nil, "", os.ErrNotExist)。
+func loadConfig() (*appConfig, string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil, "", fmt.Errorf("获取可执行文件路径失败: %w", err)
+	}
+	dir := filepath.Dir(exePath)
+	cfgPath := filepath.Join(dir, "config.json")
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, "", err
+		}
+		return nil, cfgPath, fmt.Errorf("读取配置文件失败 (%s): %w", cfgPath, err)
+	}
+
+	var cfg appConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, cfgPath, fmt.Errorf("解析配置文件失败 (%s): %w", cfgPath, err)
+	}
+
+	return &cfg, cfgPath, nil
+}
+
 // buildDefaultFilter 尝试根据 MabiTrade-core 的 channels.json 自动构建一个 BPF 过滤表达式。
 // 形如：
 //   tcp and (host 211.147.76.31 and port 11020 or host 61.164.61.10 and port 11020 ...)
@@ -219,23 +256,51 @@ func main() {
 
 	log.Printf("[%s] mtu-watcher 启动", time.Now().Format(defaultLogTimeLayout))
 
+	// 1. 默认参数
 	var (
 		nicName    string
-		ifaceName  string
-		lowMTU     int
-		normalMTU  int
+		ifaceName  string = "以太网"
+		lowMTU     int    = 386
+		normalMTU  int    = 1500
 		bpfFilter  string
-		idleSec    int
-		verbosePkt bool
+		idleSec    int    = 60
+		verbosePkt bool   = false
 	)
 
-	flag.StringVar(&nicName, "nic", "", "要抓包的网卡名（pcap 设备名，例如 \"\\Device\\NPF_{...}\"）")
-	flag.StringVar(&ifaceName, "iface", "以太网", "netsh 中显示的接口名（例如 \"以太网\" 或 \"Ethernet\"）")
-	flag.IntVar(&lowMTU, "low-mtu", 386, "降低后的 MTU 数值")
-	flag.IntVar(&normalMTU, "normal-mtu", 1500, "恢复时的 MTU 数值")
-	flag.StringVar(&bpfFilter, "filter", "", "pcap BPF 过滤表达式（留空时会尝试根据 MabiTrade-core 的 channels.json 自动生成）")
-	flag.IntVar(&idleSec, "idle-timeout", 60, "在多少秒内无新“游戏包”时恢复 MTU")
-	flag.BoolVar(&verbosePkt, "verbose-packet", false, "是否输出每个匹配数据包的详细信息")
+	// 2. 尝试从配置文件加载（双击 exe 时就主要依赖这里）
+	if cfg, cfgPath, err := loadConfig(); err == nil && cfg != nil {
+		log.Printf("[CFG] 已加载配置文件: %s", cfgPath)
+		if cfg.NicName != "" {
+			nicName = cfg.NicName
+		}
+		if cfg.IfaceName != "" {
+			ifaceName = cfg.IfaceName
+		}
+		if cfg.LowMTU > 0 {
+			lowMTU = cfg.LowMTU
+		}
+		if cfg.NormalMTU > 0 {
+			normalMTU = cfg.NormalMTU
+		}
+		if cfg.IdleTimeoutSec > 0 {
+			idleSec = cfg.IdleTimeoutSec
+		}
+		if cfg.Filter != "" {
+			bpfFilter = cfg.Filter
+		}
+		verbosePkt = cfg.VerbosePacket
+	} else if err != nil && !os.IsNotExist(err) {
+		log.Printf("[CFG] 读取配置文件失败: %v", err)
+	}
+
+	// 3. 命令行参数（如果用户带参数运行，则覆盖配置文件 / 默认值）
+	flag.StringVar(&nicName, "nic", nicName, "要抓包的网卡名（pcap 设备名，例如 \"\\Device\\NPF_{...}\"）")
+	flag.StringVar(&ifaceName, "iface", ifaceName, "netsh 中显示的接口名（例如 \"以太网\" 或 \"Ethernet\"）")
+	flag.IntVar(&lowMTU, "low-mtu", lowMTU, "降低后的 MTU 数值")
+	flag.IntVar(&normalMTU, "normal-mtu", normalMTU, "恢复时的 MTU 数值")
+	flag.StringVar(&bpfFilter, "filter", bpfFilter, "pcap BPF 过滤表达式（留空时会尝试根据 channels.json 自动生成）")
+	flag.IntVar(&idleSec, "idle-timeout", idleSec, "在多少秒内无新“游戏包”时恢复 MTU")
+	flag.BoolVar(&verbosePkt, "verbose-packet", verbosePkt, "是否输出每个匹配数据包的详细信息")
 	flag.Parse()
 
 	idleTimeout := time.Duration(idleSec) * time.Second

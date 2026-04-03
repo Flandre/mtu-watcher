@@ -43,6 +43,35 @@ go build -o mtu-watcher.exe
 
 ### 2. 使用方式
 
+#### 2.0 使用配置文件（双击运行推荐）
+
+你可以在与 `mtu-watcher.exe` 同目录下创建一个 `config.json`，写好参数后，  
+以后直接**双击 exe** 即可，无需再在命令行输入参数。
+
+示例 `config.json`：
+
+```json
+{
+  "nicName": "",
+  "ifaceName": "以太网",
+  "lowMTU": 386,
+  "normalMTU": 1500,
+  "idleTimeoutSec": 60,
+  "filter": "",
+  "verbosePacket": false
+}
+```
+
+- `nicName`：pcap 网卡名。不填时会走自动探测逻辑；
+- `ifaceName`：`netsh` 接口名，如 `以太网` / `Ethernet`；
+- `lowMTU` / `normalMTU`：低 MTU 和恢复 MTU；
+- `idleTimeoutSec`：多少秒内无新“游戏包”就恢复 MTU；
+- `filter`：可选 BPF 过滤表达式；留空时会从 `channels.json` 自动生成；
+- `verbosePacket`：是否打印每个包的详细信息。
+
+命令行参数仍然有效，会覆盖配置文件里的对应值；  
+不过在你只想双击运行时，保持默认即可。
+
 #### 2.1 自动选择网卡（不填 `-nic`）
 
 本工具已经集成了类似 `MabiTrade-core/internal/pcaputil/FindNic` 的逻辑：
